@@ -344,15 +344,29 @@ async function copyDirectory(src: string, dest: string): Promise<void> {
         const srcPath = join(src, entry.name);
         const destPath = join(dest, entry.name);
 
-        if (entry.isDirectory()) {
+        // Never follow symlinks from an untrusted skill source.
+        // A malicious repository could include symlinks to sensitive local
+        // files (for example ~/.ssh/id_rsa), and dereferencing those links
+        // would copy victim data into the installed skill.
+        //
+        // Use lstat on the concrete path instead of relying only on Dirent,
+        // which is safer across filesystems and avoids copying raced-in links.
+        let srcStats: Awaited<ReturnType<typeof lstat>>;
+        try {
+          srcStats = await lstat(srcPath);
+        } catch {
+          // If the source entry disappears during copy, skip it.
+          return;
+        }
+
+        if (srcStats.isSymbolicLink()) {
+          return;
+        }
+
+        if (srcStats.isDirectory()) {
           await copyDirectory(srcPath, destPath);
         } else {
           await cp(srcPath, destPath, {
-            // If the file is a symlink to elsewhere in a remote skill, it may not
-            // resolve correctly once it has been copied to the local location.
-            // `dereference: true` tells Node to copy the file instead of copying
-            // the symlink. `recursive: true` handles symlinks pointing to directories.
-            dereference: true,
             recursive: true,
           });
         }
